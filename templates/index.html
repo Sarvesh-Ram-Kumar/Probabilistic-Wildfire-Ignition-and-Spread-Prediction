@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wildfire Spread — Bayesian Region Simulation</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <h1>🔥 Wildfire Spread — Bayesian Region Simulation</h1>
+    <p class="subtitle">Click the canvas to place a forest region. Set shared weather (Bayesian Network causes), per-region attributes, wind, and an optional firebreak — then run a 50-second simulation.</p>
+  </header>
+
+  <div class="layout">
+
+    <!-- LEFT: Controls -->
+    <aside class="panel">
+
+      <div class="section">
+        <h2>1. Weather (shared causes)</h2>
+        <p class="hint">Feeds the Bayesian Network's root nodes for every region.</p>
+        <label>Temperature
+          <select id="envTemp">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+        <label>Rainfall
+          <select id="envRain">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+        <label>Lightning present
+          <select id="envLightning">
+            <option value="no" selected>No</option>
+            <option value="yes">Yes</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="section">
+        <h2>2. New Region Defaults</h2>
+        <p class="hint">Applied when you click the canvas to place a region. Edit per-region after placing (list below).</p>
+        <label>Radius
+          <input type="range" id="regionRadius" min="15" max="70" value="30">
+          <span id="regionRadiusLabel">30</span>
+        </label>
+        <label>Tree density
+          <select id="regionDensity">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+        <label>Near human activity (road/settlement)
+          <select id="regionHuman">
+            <option value="no" selected>No</option>
+            <option value="yes">Yes</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="section">
+        <h2>3. Wind</h2>
+        <div class="wind-control">
+          <canvas id="windDial" width="110" height="110"></canvas>
+          <div class="wind-values">
+            <label>Direction: <span id="windAngleLabel">0</span>°</label>
+            <input type="range" id="windAngle" min="0" max="359" value="0">
+            <label>Strength: <span id="windStrengthLabel">0.5</span></label>
+            <input type="range" id="windStrength" min="0" max="1" step="0.05" value="0.5">
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>4. Firebreak (Wall)</h2>
+        <div class="btn-row">
+          <button id="drawWallBtn">Draw wall</button>
+          <button id="clearWallBtn" class="secondary">Clear wall</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>5. Regions</h2>
+        <div id="regionList" class="region-list"></div>
+      </div>
+
+      <div class="section">
+        <h2>6. Simulate</h2>
+        <label>Duration (seconds)
+          <input type="number" id="simSeconds" min="5" max="200" value="50">
+        </label>
+        <div class="btn-row">
+          <button id="simulateBtn" class="primary">Run 50s simulation</button>
+          <button id="clearAllBtn" class="secondary">Clear all</button>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- RIGHT: Canvas + timeline -->
+    <main class="canvas-wrap">
+      <canvas id="mainCanvas" width="900" height="560"></canvas>
+      <p class="mode-indicator" id="modeIndicator">Mode: place region</p>
+
+      <div id="timelineControls" class="timeline-controls" style="display:none;">
+        <button id="playBtn">▶ Play</button>
+        <input type="range" id="timeSlider" min="0" max="0" value="0">
+        <span id="timeLabel">t = 0s</span>
+      </div>
+
+      <div id="eventLog" class="event-log"></div>
+    </main>
+
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
