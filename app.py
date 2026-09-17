@@ -1,7 +1,17 @@
+"""
+Flask app: HTTP routes only. All fire-reasoning logic lives in:
+  bn_model.py    - Bayesian Network (ignition causes, exact inference)
+  geometry.py    - segment-intersection helper
+  spread.py      - region-to-region spread model (MRF-style) + rock_factor
+  simulation.py  - single-run time-stepped simulation (noisy-OR combination)
+  montecarlo.py  - aggregation over many runs + what-if comparison
+"""
+
 from flask import Flask, render_template, request, jsonify
-import math
+from bn_model import STATES_3, STATES_2
+from simulation import compute_priors, run_one_simulation
+from montecarlo import analyze as mc_analyze, compare_wall as mc_compare_wall
 import random
-from bn_model import ignition_prior, STATES_3, STATES_2
 
 app = Flask(__name__)
 
@@ -9,11 +19,9 @@ STATE = {
     "regions": [],   # [{id, x, y, radius, density, human_proximity}]
     "wall": None,
     "wind": {"angle": 0, "strength": 0.5},
-    "env": {"temperature": "medium", "rainfall": "medium", "lightning": "no"},  # shared weather
+    "env": {"temperature": "medium", "rainfall": "medium", "lightning": "no"},
     "next_id": 1
 }
-
-DENSITY_TO_FUEL = {"low": 0.3, "medium": 0.6, "high": 1.0}
 
 
 @app.route("/")
@@ -112,51 +120,7 @@ def set_env():
     return jsonify(STATE["env"])
 
 
-# ---------- Geometry / spread ----------
-
-def segments_intersect(p1, p2, p3, p4):
-    def cross(o, a, b):
-        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-    d1, d2 = cross(p3, p4, p1), cross(p3, p4, p2)
-    d3, d4 = cross(p1, p2, p3), cross(p1, p2, p4)
-    return ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0))
-
-
-def wall_factor(i, j, wall, wind_strength):
-    if wall is None:
-        return 1.0
-    p1, p2 = (i["x"], i["y"]), (j["x"], j["y"])
-    p3, p4 = (wall["x1"], wall["y1"]), (wall["x2"], wall["y2"])
-    if segments_intersect(p1, p2, p3, p4):
-        base_block, wind_penetration = 0.85, 0.5
-        return max(0.05, 1 - base_block * (1 - wind_penetration * wind_strength))
-    return 1.0
-
-
-def spread_probability(i, j, wind, wall, lam=140.0, base_rate=0.5):
-    """Per-second probability fire spreads from burning region i to unburned region j."""
-    dx, dy = j["x"] - i["x"], j["y"] - i["y"]
-    center_dist = math.hypot(dx, dy)
-    edge_dist = max(1.0, center_dist - i["radius"] - j["radius"])
-    if center_dist == 0:
-        return 0.0
-
-    distance_decay = math.exp(-edge_dist / lam)
-
-    wind_rad = math.radians(wind["angle"])
-    wind_vec = (math.cos(wind_rad), math.sin(wind_rad))
-    to_j = (dx / center_dist, dy / center_dist)
-    cos_theta = wind_vec[0] * to_j[0] + wind_vec[1] * to_j[1]
-    wind_factor = max(0.05, 1 + wind["strength"] * cos_theta)
-
-    fuel_j = DENSITY_TO_FUEL.get(j["density"], 0.6)
-    wf = wall_factor(i, j, wall, wind["strength"])
-
-    p = base_rate * distance_decay * wind_factor * fuel_j * wf
-    return min(0.95, max(0.0, p))
-
-
-# ---------- Simulation (time-stepped, BN + spread, cause attribution) ----------
+# ---------- Single-run simulation ----------
 
 @app.route("/api/simulate", methods=["POST"])
 def simulate():
@@ -172,75 +136,19 @@ def simulate():
         random.seed(int(seed))
 
     regions = STATE["regions"]
-    wall = STATE["wall"]
-    wind = STATE["wind"]
-    env = STATE["env"]
-
     if not regions:
         return jsonify({"error": "no regions placed"}), 400
 
-    # precompute each region's BN-derived per-second base ignition hazard
-    priors = {}
-    for r in regions:
-        p = ignition_prior(
-            temperature=env["temperature"],
-            rainfall=env["rainfall"],
-            lightning=env["lightning"],
-            human_proximity=r["human_proximity"],
-            tree_density=r["density"],
-        )
-        # BN gives an overall likelihood; treat a scaled-down fraction as the per-second
-        # hazard so a 50s simulation doesn't trivially ignite every region instantly
-        priors[r["id"]] = p * 0.04
+    wall, wind, env = STATE["wall"], STATE["wind"], STATE["env"]
+    priors = compute_priors(regions, env)
 
-    by_id = {r["id"]: r for r in regions}
-    ids = [r["id"] for r in regions]
-
-    on_fire = set()
-    ignited_at = {}
-    cause = {}
-
-    timeline = []
-
-    for t in range(1, seconds + 1):
-        events = []
-        currently_burning = list(on_fire)
-
-        for rid in ids:
-            if rid in on_fire:
-                continue
-            r = by_id[rid]
-
-            own_ignite = random.random() < priors[rid]
-
-            spread_ignite = False
-            triggering_neighbor = None
-            best_p = -1
-            for bid in currently_burning:
-                p_sp = spread_probability(by_id[bid], r, wind, wall)
-                if random.random() < p_sp:
-                    spread_ignite = True
-                    if p_sp > best_p:
-                        best_p = p_sp
-                        triggering_neighbor = bid
-
-            if own_ignite or spread_ignite:
-                on_fire.add(rid)
-                ignited_at[rid] = t
-                if own_ignite and not spread_ignite:
-                    cause[rid] = {"type": "natural/human cause", "detail": describe_cause(env, r)}
-                elif spread_ignite and not own_ignite:
-                    cause[rid] = {"type": "spread", "detail": f"spread from region #{triggering_neighbor}"}
-                else:
-                    cause[rid] = {"type": "both", "detail": f"own cause AND spread from region #{triggering_neighbor}"}
-                events.append({"id": rid, "cause_type": cause[rid]["type"], "cause_detail": cause[rid]["detail"]})
-
-        timeline.append({"second": t, "events": events})
-        if len(on_fire) == len(ids):
-            break
+    timeline, ignited_at, cause = run_one_simulation(
+        regions, wall, wind, env, priors, seconds=seconds, track_timeline=True
+    )
 
     summary = []
-    for rid in ids:
+    for r in regions:
+        rid = r["id"]
         summary.append({
             "id": rid,
             "ignited": rid in ignited_at,
@@ -253,19 +161,55 @@ def simulate():
     return jsonify({"timeline": timeline, "summary": summary, "seconds_run": len(timeline)})
 
 
-def describe_cause(env, region):
-    reasons = []
-    if env["lightning"] == "yes":
-        reasons.append("lightning")
-    if region["human_proximity"] == "yes":
-        reasons.append("human activity")
-    if env["temperature"] == "high" and env["rainfall"] == "low":
-        reasons.append("hot/dry conditions")
-    if region["density"] == "high":
-        reasons.append("dense fuel load")
-    if not reasons:
-        reasons.append("background risk")
-    return " + ".join(reasons)
+# ---------- Monte Carlo aggregation ----------
+
+@app.route("/api/analyze", methods=["POST"])
+def analyze_route():
+    """
+    Monte Carlo analysis: runs the simulation N times and aggregates into
+    probability estimates (P(ignite), P(last), cause split, expected time, etc.)
+    body: { runs: int (default 300), seconds: int (default 50), seed: optional int }
+    """
+    data = request.get_json(force=True) if request.data else {}
+    runs = max(1, min(5000, int(data.get("runs", 300))))
+    seconds = int(data.get("seconds", 50))
+    seed = data.get("seed")
+    if seed is not None:
+        random.seed(int(seed))
+
+    regions = STATE["regions"]
+    if not regions:
+        return jsonify({"error": "no regions placed"}), 400
+
+    landscape, results = mc_analyze(
+        regions, STATE["wall"], STATE["wind"], STATE["env"], runs=runs, seconds=seconds
+    )
+    return jsonify({"landscape": landscape, "results": results})
+
+
+# ---------- What-if: firebreak comparison ----------
+
+@app.route("/api/compare_wall", methods=["POST"])
+def compare_wall_route():
+    """
+    Runs Monte Carlo analysis with and without the current firebreak and reports
+    the difference in expected damage (decision-network utility comparison).
+    body: { runs: int (default 300), seconds: int (default 50) }
+    """
+    data = request.get_json(force=True) if request.data else {}
+    runs = max(1, min(5000, int(data.get("runs", 300))))
+    seconds = int(data.get("seconds", 50))
+
+    regions = STATE["regions"]
+    if not regions:
+        return jsonify({"error": "no regions placed"}), 400
+    if STATE["wall"] is None:
+        return jsonify({"error": "no firebreak drawn - draw one first to compare"}), 400
+
+    result = mc_compare_wall(
+        regions, STATE["wall"], STATE["wind"], STATE["env"], runs=runs, seconds=seconds
+    )
+    return jsonify(result)
 
 
 if __name__ == "__main__":

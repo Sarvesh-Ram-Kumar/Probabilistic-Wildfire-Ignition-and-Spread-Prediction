@@ -12,7 +12,7 @@
 
   <header class="topbar">
     <h1>🔥 Wildfire Spread — Bayesian Region Simulation</h1>
-    <p class="subtitle">Click the canvas to place a forest region. Set shared weather (Bayesian Network causes), per-region attributes, wind, and an optional firebreak — then run a 50-second simulation.</p>
+    <p class="subtitle">Click the canvas to place a forest region. Set shared weather (Bayesian Network causes), per-region attributes, wind, and an optional firebreak — then run a simulation or a Monte Carlo analysis.</p>
   </header>
 
   <div class="layout">
@@ -94,14 +94,26 @@
       </div>
 
       <div class="section">
-        <h2>6. Simulate</h2>
+        <h2>6. Single Simulation</h2>
         <label>Duration (seconds)
           <input type="number" id="simSeconds" min="5" max="200" value="50">
         </label>
         <div class="btn-row">
-          <button id="simulateBtn" class="primary">Run 50s simulation</button>
+          <button id="simulateBtn" class="primary">Run simulation</button>
           <button id="clearAllBtn" class="secondary">Clear all</button>
         </div>
+      </div>
+
+      <div class="section">
+        <h2>7. Monte Carlo Analysis</h2>
+        <label>Number of runs
+          <input type="number" id="mcRuns" min="10" max="2000" value="300">
+        </label>
+        <div class="btn-row">
+          <button id="analyzeBtn" class="primary">Run analysis</button>
+          <button id="compareWallBtn" class="secondary">Compare with/without wall</button>
+        </div>
+        <div id="mcResults"></div>
       </div>
 
     </aside>

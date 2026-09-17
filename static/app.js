@@ -23,12 +23,11 @@ let state = {
   env: { temperature: "medium", rainfall: "medium", lightning: "no" }
 };
 
-let mode = "place"; // 'place' | 'wall1' | 'wall2'
+let mode = "place";
 let wallFirstPoint = null;
 
-let simTimeline = null;   // array of {second, events}
-let simSummary = null;    // per-region final outcome
-let burningByTime = null; // t -> Set of ids burning at that time (cumulative)
+let simTimeline = null;
+let burningByTime = null;
 let currentT = 0;
 let playing = false;
 let playTimer = null;
@@ -74,6 +73,8 @@ document.getElementById("clearAllBtn").addEventListener("click", async () => {
 });
 
 document.getElementById("simulateBtn").addEventListener("click", runSimulation);
+document.getElementById("analyzeBtn").addEventListener("click", runAnalysis);
+document.getElementById("compareWallBtn").addEventListener("click", runCompareWall);
 
 function setMode(m) {
   mode = m;
@@ -298,7 +299,7 @@ function hexToRgba(hex, alpha) {
   return `rgba(${rr},${gg},${bb},${alpha})`;
 }
 
-// ---------- Simulation ----------
+// ---------- Single simulation ----------
 
 async function runSimulation() {
   if (state.regions.length === 0) {
@@ -315,9 +316,7 @@ async function runSimulation() {
   if (data.error) { alert(data.error); return; }
 
   simTimeline = data.timeline;
-  simSummary = data.summary;
 
-  // build cumulative burning sets per time step
   burningByTime = {};
   let burning = new Set();
   burningByTime[0] = new Set();
@@ -386,14 +385,87 @@ function renderEventLogUpTo(t) {
 
 function resetSimUI() {
   simTimeline = null;
-  simSummary = null;
   burningByTime = null;
   currentT = 0;
   playing = false;
   clearInterval(playTimer);
   document.getElementById("timelineControls").style.display = "none";
   document.getElementById("eventLog").innerHTML = "";
+  document.getElementById("mcResults").innerHTML = "";
   renderRegionList();
+}
+
+// ---------- Monte Carlo analysis ----------
+
+async function runAnalysis() {
+  if (state.regions.length === 0) {
+    alert("Place at least one region first.");
+    return;
+  }
+  const runs = parseInt(document.getElementById("mcRuns").value) || 300;
+  const seconds = parseInt(document.getElementById("simSeconds").value) || 50;
+
+  const res = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runs, seconds })
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+
+  renderMcResults(data.landscape, data.results);
+}
+
+function renderMcResults(landscape, results) {
+  const container = document.getElementById("mcResults");
+  let html = `<div class="landscape-summary">
+    <div><b>Expected regions burned:</b> ${landscape.expected_regions_burned} / ${landscape.n_regions}</div>
+    <div><b>Utility (−E[burned]):</b> ${landscape.utility}</div>
+    <div><b>P(all ignite):</b> ${(landscape.p_all_ignite*100).toFixed(1)}%</div>
+    <div><b>P(none ignite):</b> ${(landscape.p_none_ignite*100).toFixed(1)}%</div>
+    <div style="color:var(--muted)">${landscape.runs} runs × ${landscape.seconds}s</div>
+  </div>`;
+
+  const sorted = [...results].sort((a, b) => b.p_last - a.p_last);
+  html += `<table><tr><th>Rgn</th><th>P(ign)</th><th>P(last)</th><th>Spread%</th><th>Own%</th><th>Mean t</th></tr>`;
+  for (const r of sorted) {
+    html += `<tr><td>#${r.id}</td><td>${(r.p_ignite*100).toFixed(0)}%</td><td>${(r.p_last*100).toFixed(0)}%</td>` +
+            `<td>${r.p_cause_spread!==null ? (r.p_cause_spread*100).toFixed(0)+'%' : '—'}</td>` +
+            `<td>${r.p_cause_own!==null ? (r.p_cause_own*100).toFixed(0)+'%' : '—'}</td>` +
+            `<td>${r.mean_ignite_time ?? '—'}</td></tr>`;
+  }
+  html += `</table>`;
+  container.innerHTML = html;
+}
+
+async function runCompareWall() {
+  if (state.regions.length === 0) {
+    alert("Place at least one region first.");
+    return;
+  }
+  if (!state.wall) {
+    alert("Draw a firebreak first (section 4) to compare with/without it.");
+    return;
+  }
+  const runs = parseInt(document.getElementById("mcRuns").value) || 300;
+  const seconds = parseInt(document.getElementById("simSeconds").value) || 50;
+
+  const res = await fetch("/api/compare_wall", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runs, seconds })
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+
+  const container = document.getElementById("mcResults");
+  container.innerHTML = `<div class="landscape-summary">
+    <div><b>Firebreak Comparison</b> (${data.runs} runs × ${data.seconds}s)</div>
+    <div>Expected burned — no wall: <b>${data.expected_burned_without_wall}</b></div>
+    <div>Expected burned — with wall: <b>${data.expected_burned_with_wall}</b></div>
+    <div>Regions saved: <b>${data.regions_saved}</b></div>
+    <div>Utility gain: <b>${data.utility_gain}</b></div>
+  </div>`;
 }
 
 // ---------- Init ----------
